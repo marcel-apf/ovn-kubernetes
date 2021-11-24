@@ -172,6 +172,7 @@ func (p *Plugin) CmdAdd(args *skel.CmdArgs) error {
 	setupLogging(conf)
 
 	req := newCNIRequest(args)
+	klog.Warningf("Request: %+#v", req)
 
 	body, errB := p.doCNI("http://dummy/", req)
 	if errB != nil {

@@ -10,6 +10,10 @@ type NetConf struct {
 	types.NetConf
 	// PciAddrs in case of using sriov
 	DeviceID string `json:"deviceID,omitempty"`
+	// If it's subfunction
+	//TODO: Move this down to global configuration flag (same as issmartnic)
+	//Use DeviceID to pass the PF
+	SubFunction bool `json:"subfunction,omitempty"`
 	// LogFile to log all the messages from cni shim binary to
 	LogFile string `json:"logFile,omitempty"`
 	// Level is the logging verbosity level

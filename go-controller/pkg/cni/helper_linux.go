@@ -160,6 +160,8 @@ func setupSriovInterface(netns ns.NetNS, containerID, ifName string, ifInfo *Pod
 	contIface := &current.Interface{}
 
 	// 1. get VF netdevice from PCI
+	// 1. Subfunctions: create a new subfunction
+	//    Get the netdev from the subfunction (virtio-vdpa or mlx5)
 	vfNetdevices, err := util.GetSriovnetOps().GetNetDevicesFromPci(pciAddrs)
 	if err != nil {
 		return nil, nil, err
@@ -174,18 +176,21 @@ func setupSriovInterface(netns ns.NetNS, containerID, ifName string, ifInfo *Pod
 
 	if !ifInfo.IsSmartNic {
 		// 2. get Uplink netdevice
+		// SF:   Get the representor of the PF (we can hardcode)
 		uplink, err := util.GetSriovnetOps().GetUplinkRepresentor(pciAddrs)
 		if err != nil {
 			return nil, nil, err
 		}
 
 		// 3. get VF index from PCI
+		// SF: we don't need it
 		vfIndex, err := util.GetSriovnetOps().GetVfIndexByPciAddress(pciAddrs)
 		if err != nil {
 			return nil, nil, err
 		}
 
 		// 4. lookup representor
+		// SF: Lookup representor for the Subfunction
 		rep, err := util.GetSriovnetOps().GetVfRepresentor(uplink, vfIndex)
 		if err != nil {
 			return nil, nil, err
@@ -193,6 +198,7 @@ func setupSriovInterface(netns ns.NetNS, containerID, ifName string, ifInfo *Pod
 		oldHostRepName := rep
 
 		// 5. rename the host VF representor
+		// SF: rename the host VF representor
 		hostIface.Name = containerID[:15]
 		if err = renameLink(oldHostRepName, hostIface.Name); err != nil {
 			return nil, nil, fmt.Errorf("failed to rename %s to %s: %v", oldHostRepName, hostIface.Name, err)
@@ -204,12 +210,14 @@ func setupSriovInterface(netns ns.NetNS, containerID, ifName string, ifInfo *Pod
 		hostIface.Mac = link.Attrs().HardwareAddr.String()
 
 		// 6. set MTU on VF representor
+		// SF: same
 		if err = util.GetNetLinkOps().LinkSetMTU(link, ifInfo.MTU); err != nil {
 			return nil, nil, fmt.Errorf("failed to set MTU on %s: %v", hostIface.Name, err)
 		}
 	}
 
 	// 7. Move VF to Container namespace
+	// SF: the same
 	err = moveIfToNetns(vfNetdevice, netns)
 	if err != nil {
 		return nil, nil, err
@@ -332,7 +340,7 @@ func (pr *PodRequest) ConfigureInterface(podLister corev1listers.PodLister, kcli
 
 	var hostIface, contIface *current.Interface
 
-	klog.V(5).Infof("CNI Conf %v", pr.CNIConf)
+	klog.Infof("CNI Conf %v", pr.CNIConf)
 	if pr.CNIConf.DeviceID != "" {
 		// SR-IOV Case
 		hostIface, contIface, err = setupSriovInterface(netns, pr.SandboxID, pr.IfName, ifInfo, pr.CNIConf.DeviceID)
@@ -340,9 +348,15 @@ func (pr *PodRequest) ConfigureInterface(podLister corev1listers.PodLister, kcli
 		if pr.IsSmartNIC {
 			return nil, fmt.Errorf("unexpected configuration, pod request on smart-nic host. " +
 				"device ID must be provided")
+		} else if pr.CNIConf.SubFunction {
+			klog.Infof("Special configuration! Doing the subfunction hack v3!")
+			// PF address should be supplied from outside
+			pr.CNIConf.DeviceID = "0000:07:00.0"
+			hostIface, contIface, err = setupSfInterface(netns, pr.SandboxID, pr.IfName, ifInfo, pr.CNIConf.DeviceID)
+		} else {
+			// General case
+			hostIface, contIface, err = setupInterface(netns, pr.SandboxID, pr.IfName, ifInfo)
 		}
-		// General case
-		hostIface, contIface, err = setupInterface(netns, pr.SandboxID, pr.IfName, ifInfo)
 	}
 	if err != nil {
 		return nil, err
@@ -414,7 +428,7 @@ func (pr *PodRequest) deletePodConntrack() {
 func (pr *PodRequest) deletePorts() {
 	ifaceName := pr.SandboxID[:15]
 	out, err := ovsExec("del-port", "br-int", ifaceName)
-	_ = util.LinkDelete(ifaceName)
+	_ = util.LinkDelete(ifaceName) // ip link del
 	if err != nil && !strings.Contains(out, "no port named") {
 		// DEL should be idempotent; don't return an error just log it
 		klog.Warningf("Failed to delete OVS port %s: %v\n  %q", ifaceName, err, string(out))
@@ -422,8 +436,17 @@ func (pr *PodRequest) deletePorts() {
 }
 
 // PlatformSpecificCleanup deletes the OVS port
+// SF: Delete starts here
 func (pr *PodRequest) PlatformSpecificCleanup() error {
+	// SF: ifaceName := pr.SandboxID[:15]
+	// 1. Find Subfunction from port rpresentor "ifName"
+	// 2. Delete port from OVS: Test: ovs-vsctl del-port BRIRDGE_NAME ifaceName
 	pr.deletePorts()
+	// 3. Delete de vdpa device (if it sstill exists)
+	//    Delete the subfunction
+	deleteSfInterface(pr.SandboxID)
+
+	// 4: same
 	_ = clearPodBandwidth(pr.SandboxID)
 	pr.deletePodConntrack()
 

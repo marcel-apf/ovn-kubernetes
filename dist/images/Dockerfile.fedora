@@ -9,7 +9,7 @@
 # are built locally and included in the image (instead of the rpm)
 #
 
-FROM fedora:34
+FROM fedora:35
 
 USER root
 
@@ -17,12 +17,16 @@ ENV PYTHONDONTWRITEBYTECODE yes
 
 ARG ovnver=ovn-21.09.0-3.fc33
 
+ADD https://github.com/AkihiroSuda/clone3-workaround/releases/download/v1.0.0/clone3-workaround.x86_64 /clone3-workaround
+RUN chmod 755 /clone3-workaround
+SHELL ["/clone3-workaround", "/bin/sh", "-c"]
+
 # install needed rpms - openvswitch must be 2.10.4 or higher
 RUN INSTALL_PKGS=" \
 	python3-pyyaml bind-utils procps-ng openssl numactl-libs firewalld-filesystem \
 	libpcap hostname kubernetes-client \
         ovn ovn-central ovn-host python3-openvswitch tcpdump openvswitch-test python3-pyOpenSSL \
-	iptables iproute iputils strace socat koji \
+	iptables iproute iputils strace socat koji ethtool \
         " && \
 	dnf install --best --refresh -y --setopt=tsflags=nodocs $INSTALL_PKGS && \
 	dnf clean all && rm -rf /var/cache/dnf/*
